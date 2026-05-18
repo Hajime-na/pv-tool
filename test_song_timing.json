@@ -1,0 +1,88 @@
+{
+  "version": 1,
+  "audio": "",
+  "timings": [
+    {
+      "index": 0,
+      "section": "Title",
+      "mood": "title",
+      "start": 0,
+      "end": 4,
+      "lines": []
+    },
+    {
+      "index": 1,
+      "section": "Verse 1",
+      "mood": "memory",
+      "start": 4,
+      "end": 16,
+      "lines": [
+        "きょうは テストのうた",
+        "画面の中で ひかる",
+        "小さなことも ひとつずつ",
+        "たしかめて 進もう"
+      ]
+    },
+    {
+      "index": 2,
+      "section": "Pre-Chorus",
+      "mood": "wind",
+      "start": 16,
+      "end": 24,
+      "lines": [
+        "ずれても だいじょうぶ",
+        "また 合わせればいい"
+      ]
+    },
+    {
+      "index": 3,
+      "section": "Chorus",
+      "mood": "bloom",
+      "start": 24,
+      "end": 36,
+      "lines": [
+        "うたが 流れて",
+        "ことばが ひらく",
+        "タイミング 合えば",
+        "景色も うごく"
+      ]
+    },
+    {
+      "index": 4,
+      "section": "Verse 2",
+      "mood": "memory",
+      "start": 36,
+      "end": 48,
+      "lines": [
+        "次のBOXへ すすむ",
+        "頭をちゃんと 守る",
+        "長い歌詞なら 分けて",
+        "見やすく していこう"
+      ]
+    },
+    {
+      "index": 5,
+      "section": "Chorus",
+      "mood": "bloom",
+      "start": 48,
+      "end": 56,
+      "lines": [
+        "うたが 流れて",
+        "ことばが ひらく",
+        "タイミング 合えば",
+        "景色も うごく"
+      ]
+    },
+    {
+      "index": 6,
+      "section": "Outro",
+      "mood": "last",
+      "start": 56,
+      "end": 60,
+      "lines": [
+        "これで 確認",
+        "ツールは だいじょうぶ"
+      ]
+    }
+  ]
+}

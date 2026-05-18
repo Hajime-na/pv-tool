@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "title": "テストソング",
+  "duration": 60,
+  "format": "9:16 縦長",
+  "status": "試験用",
+  "assets": {
+    "audio": "",
+    "videoPreview": "sauce/test_song_pv.mp4",
+    "projectDir": "C:\\Codex\\PV\\テストソング",
+    "lyrics": "sauce/test_song_lyrics.txt",
+    "background": "",
+    "jacket": "",
+    "output": "test_song_lyrics_burned.mp4"
+  },
+  "concept": "PV制作ツールの試験確認用。BOX細分化、保存、焼きこみ確認に使う。",
+  "burnSettings": {
+    "font_scale": 1,
+    "position": "bottom",
+    "margin_x": 0.08,
+    "margin_bottom": 0.07,
+    "box_opacity": 0.52,
+    "box_width": 0.84,
+    "lines_per_page": 2,
+    "preview_start_seconds": 0,
+    "preview_seconds": 35,
+    "timing_offset_start": 0,
+    "timing_offset_end": 0,
+    "show_section": false
+  },
+  "lyricsText": "",
+  "scenes": []
+}
