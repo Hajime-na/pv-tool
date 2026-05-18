@@ -362,8 +362,7 @@ def burn(project_dir: Path, output: Path | None, preview_seconds: float | None,
         # FFmpegのcwdをtmpに設定 → "subtitles.ass"だけで参照できる
         ass_filter = "ass=subtitles.ass"
 
-        # プレビューのみ -y（上書きOK）。本番は連番で回避済みなので -y 不要
-        cmd = [ffmpeg, "-hide_banner", "-y" if preview_seconds else "-n"]
+        cmd = [ffmpeg, "-hide_banner", "-y"]
         if start_seconds > 0:
             cmd += ["-ss", str(start_seconds)]
         cmd += ["-i", str(source)]
