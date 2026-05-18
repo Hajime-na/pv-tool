@@ -30,6 +30,13 @@ FONT_CANDIDATES = [
     r"C:\Windows\Fonts\msmincho.ttc",
 ]
 
+FONT_FAMILY_PRESETS = {
+    "mincho": "Yu Mincho Demibold",
+    "gothic": "Yu Gothic UI",
+    "biz_gothic": "BIZ UDPGothic",
+    "pop": "HGSoeiKakupoptai",
+}
+
 
 def find_ffmpeg() -> str | None:
     found = shutil.which("ffmpeg")
@@ -56,6 +63,41 @@ def find_font() -> str | None:
         if Path(c).exists():
             return c
     return None
+
+
+def select_font_name(settings: dict, font_path: str | None) -> str:
+    preset = str(settings.get("font_family", "mincho")).strip()
+    if preset in FONT_FAMILY_PRESETS:
+        return FONT_FAMILY_PRESETS[preset]
+    if preset and preset not in {"auto", "default"}:
+        return preset
+
+    font_name = select_font_name(settings, font_path)
+    if not font_path:
+        return font_name
+    try:
+        import winreg
+        fonts_key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                                   r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts")
+        font_file = Path(font_path).name
+        i = 0
+        while True:
+            try:
+                reg_name, reg_val, _ = winreg.EnumValue(fonts_key, i)
+                if reg_val.lower() == font_file.lower():
+                    return reg_name.replace(" (TrueType)", "").replace(" (OpenType)", "").strip()
+                i += 1
+            except OSError:
+                break
+    except Exception:
+        try:
+            from PIL import ImageFont as _IF
+            _f = _IF.truetype(font_path, 12)
+            parts = _f.getname()
+            return f"{parts[0]} {parts[1]}".strip() if parts[1] not in ("Regular",) else parts[0]
+        except Exception:
+            pass
+    return font_name
 
 
 def resolve_video(project_dir: Path, project: dict) -> Path:
@@ -131,7 +173,7 @@ def generate_ass(timings: list[dict], settings: dict, width: int, height: int,
 
     # フォント名はWindowsレジストリ登録名をそのまま使う（Bold=-1不使用）
     font_name = "Yu Mincho Demibold"
-    if font_path:
+    if str(settings.get("font_family", "mincho")).strip() in {"auto", "default"} and font_path:
         try:
             import winreg
             fonts_key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
@@ -191,32 +233,67 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"
         if not lines:
             continue
 
-        pages = [lines[i:i + lines_per_page] for i in range(0, len(lines), lines_per_page)]
-        seg_duration = max(0.1, raw_end - raw_start)
-        page_dur = seg_duration / len(pages)
+        # line_timings があれば使う（analyze_timing2.py で生成した精密タイミング）
+        line_timings = timing.get("line_timings")
+        if line_timings:
+            # line_timings: [{start, end, text}, ...] を lines_per_page ごとにまとめて表示
+            # 同じ (start, end) のペアを1ページとして扱う
+            pages_lt: list[tuple[float, float, list[str]]] = []
+            for lt in line_timings:
+                lt_start = float(lt["start"]) + offset
+                lt_end   = float(lt["end"])   + offset
+                lt_text  = str(lt.get("text", "")).strip()
+                if not lt_text:
+                    continue
+                if pages_lt and abs(pages_lt[-1][0] - lt_start) < 0.01:
+                    # 同じ start → 同じページに追加
+                    pages_lt[-1][2].append(lt_text)
+                else:
+                    pages_lt.append((lt_start, lt_end, [lt_text]))
+            for pi, (p_start, p_end, page_lines) in enumerate(pages_lt):
+                p_start_clipped = max(preview_start, p_start)
+                p_end_clipped   = min(preview_end, p_end)
+                if p_end_clipped <= p_start_clipped:
+                    continue
+                disp_start = p_start_clipped - preview_start
+                disp_end   = p_end_clipped   - preview_start
+                text = r"\N".join(page_lines)
+                if show_section and pi == 0:
+                    section = str(timing.get("section", ""))
+                    if section:
+                        dialogues.append(
+                            f"Dialogue: 0,{fmt_ass_time(disp_start)},{fmt_ass_time(disp_end)},Section,,0,0,0,,{section}"
+                        )
+                dialogues.append(
+                    f"Dialogue: 0,{fmt_ass_time(disp_start)},{fmt_ass_time(disp_end)},Default,,0,0,0,,{text}"
+                )
+        else:
+            # フォールバック: 均等割り
+            pages = [lines[i:i + lines_per_page] for i in range(0, len(lines), lines_per_page)]
+            seg_duration = max(0.1, raw_end - raw_start)
+            page_dur = seg_duration / len(pages)
 
-        for pi, page in enumerate(pages):
-            p_start = raw_start + page_dur * pi + offset
-            p_end = raw_start + page_dur * (pi + 1) + offset
-            p_start = max(preview_start, p_start)
-            p_end = min(preview_end, p_end)
-            if p_end <= p_start:
-                continue
+            for pi, page in enumerate(pages):
+                p_start = raw_start + page_dur * pi + offset
+                p_end = raw_start + page_dur * (pi + 1) + offset
+                p_start = max(preview_start, p_start)
+                p_end = min(preview_end, p_end)
+                if p_end <= p_start:
+                    continue
 
-            # プレビューオフセット調整
-            disp_start = p_start - preview_start
-            disp_end = p_end - preview_start
+                disp_start = p_start - preview_start
+                disp_end = p_end - preview_start
 
-            text = r"\N".join(page)
-            if show_section and pi == 0:
-                section = str(timing.get("section", ""))
-                if section:
-                    dialogues.append(
-                        f"Dialogue: 0,{fmt_ass_time(disp_start)},{fmt_ass_time(disp_end)},Section,,0,0,0,,{section}"
-                    )
-            dialogues.append(
-                f"Dialogue: 0,{fmt_ass_time(disp_start)},{fmt_ass_time(disp_end)},Default,,0,0,0,,{text}"
-            )
+                text = r"\N".join(page)
+                if show_section and pi == 0:
+                    section = str(timing.get("section", ""))
+                    if section:
+                        dialogues.append(
+                            f"Dialogue: 0,{fmt_ass_time(disp_start)},{fmt_ass_time(disp_end)},Section,,0,0,0,,{section}"
+                        )
+                dialogues.append(
+                    f"Dialogue: 0,{fmt_ass_time(disp_start)},{fmt_ass_time(disp_end)},Default,,0,0,0,,{text}"
+                )
 
     return header + "\n" + "\n".join(dialogues) + "\n"
 
@@ -330,6 +407,7 @@ def main() -> None:
     parser.add_argument("--preview-seconds", type=float)
     parser.add_argument("--start-seconds", type=float, default=0.0)
     parser.add_argument("--font-scale", type=float, default=1.0)
+    parser.add_argument("--font-family", default="mincho")
     parser.add_argument("--position", choices=["bottom", "middle", "upper"], default="bottom")
     parser.add_argument("--margin-x", type=float, default=0.08)
     parser.add_argument("--margin-bottom", type=float, default=0.07)
@@ -345,6 +423,7 @@ def main() -> None:
     output = Path(args.output).resolve() if args.output else None
     settings = {
         "font_scale": args.font_scale,
+        "font_family": args.font_family,
         "position": args.position,
         "margin_x": args.margin_x,
         "margin_bottom": args.margin_bottom,

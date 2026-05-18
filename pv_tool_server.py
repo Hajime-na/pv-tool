@@ -98,6 +98,7 @@ class RangeRequestHandler(SimpleHTTPRequestHandler):
                 if isinstance(settings, dict):
                     option_map = {
                         "font_scale": "--font-scale",
+                        "font_family": "--font-family",
                         "position": "--position",
                         "margin_x": "--margin-x",
                         "margin_bottom": "--margin-bottom",
@@ -185,14 +186,18 @@ class RangeRequestHandler(SimpleHTTPRequestHandler):
                 for path in sorted(PV_ROOT.iterdir()):
                     if not path.is_dir() or path.name.lower() == "pv-tool":
                         continue
-                    projects.append({"name": path.name, "path": str(path.resolve())})
+                    tj = path / "pv_lyrics_timing.json"
+                    mtime = int((tj if tj.exists() else path).stat().st_mtime * 1000)
+                    projects.append({"name": path.name, "path": str(path.resolve()), "lastModified": mtime})
             if MUSIC_ROOT.exists():
                 for song_dir in sorted(MUSIC_ROOT.iterdir()):
                     if not song_dir.is_dir():
                         continue
                     pv_dir = song_dir / "PV"
                     if pv_dir.is_dir():
-                        projects.append({"name": song_dir.name, "path": str(pv_dir.resolve())})
+                        tj = pv_dir / "pv_lyrics_timing.json"
+                        mtime = int((tj if tj.exists() else pv_dir).stat().st_mtime * 1000)
+                        projects.append({"name": song_dir.name, "path": str(pv_dir.resolve()), "lastModified": mtime})
             body = json.dumps({"projects": projects}, ensure_ascii=False).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")

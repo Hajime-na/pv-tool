@@ -262,6 +262,43 @@
       font-family: ui-monospace, Consolas, monospace;
       font-size: 12px;
     }
+    #lyricsOverlay .lyricLine {
+      display: inline-block;
+      background: rgba(0,0,0,0.62);
+      color: #fff;
+      font-size: clamp(14px, 2.2vw, 22px);
+      font-weight: bold;
+      letter-spacing: 0.06em;
+      padding: 4px 14px 5px;
+      border-radius: 4px;
+      margin: 2px 0;
+      text-shadow: 0 1px 4px rgba(0,0,0,0.8);
+      white-space: pre;
+    }
+    #lyricsOverlay { display: flex; flex-direction: column; align-items: center; }
+    .lineTimingList {
+      max-height: 340px;
+      overflow-y: auto;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #11131a;
+    }
+    .ltRow {
+      display: grid;
+      grid-template-columns: 54px 90px 1fr;
+      gap: 6px;
+      align-items: center;
+      padding: 5px 8px;
+      cursor: pointer;
+      border-bottom: 1px solid #1d1f28;
+      font-size: 13px;
+    }
+    .ltRow:last-child { border-bottom: none; }
+    .ltRow:hover { background: #1d202b; }
+    .ltRow.active { background: #2a1e2e; outline: 1px solid var(--accent); }
+    .ltTime { font-variant-numeric: tabular-nums; color: var(--warn); font-size: 12px; }
+    .ltSection { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ltText { color: var(--text); }
     .output {
       min-height: 220px;
       font-family: ui-monospace, Consolas, monospace;
@@ -323,7 +360,7 @@
         <div class="step">
           <strong>2. 歌詞ファイル選択</strong>
           <label class="fileButton">歌詞ファイル選択<input id="lyricsFile" type="file"></label>
-          <label>同じフォルダの歌詞<select id="lyricsSelect"><option value="">選択してください</option></select></label>
+          <select id="lyricsSelect" style="display:none"><option value=""></option></select>
           <label>歌詞パス<input id="lyricsPath" value=""></label>
         </div>
         <div class="step">
@@ -344,11 +381,20 @@
         <button id="nudgeBack">-0.1s</button>
         <button id="nudgeForward">+0.1s</button>
         <button id="nudgeForward5">+0.5s</button>
+        <button id="prevPeak" class="warn">← 前行</button>
+        <button id="nextPeak" class="warn">→ 次行</button>
 
         <button id="clearProject">表示を初期化</button>
         <button id="clearPathOnly" style="background:#888;color:#fff">フォルダ設定リセット</button>
       </div>
-      <video id="video" controls preload="metadata"></video>
+      <div style="position:relative;display:inline-block;width:100%">
+        <video id="video" controls preload="metadata" style="width:100%;display:block"></video>
+        <div id="lyricsOverlay" style="
+          position:absolute;bottom:48px;left:0;right:0;
+          text-align:center;pointer-events:none;
+          padding:0 8%;
+        "></div>
+      </div>
       <div class="syncReadout">
         <div><span>現在time <small style="color:#888">（クリックで移動）</small></span><strong id="currentTimeLabel" style="cursor:pointer;text-decoration:underline dotted" title="クリックして秒数を入力して移動">0.00</strong></div>
         <div><span>選択シーン</span><strong id="activeSceneLabel">未選択</strong></div>
@@ -376,6 +422,7 @@
       <summary>焼きこみ設定</summary>
       <div class="grid">
         <label>文字サイズ<input id="burnFontScale" type="number" min="0.6" max="1.8" step="0.05" value="1.0"></label>
+        <label>文字種<select id="burnFontFamily"><option value="mincho">明朝</option><option value="gothic">ゴシック</option><option value="biz_gothic">太ゴシック</option><option value="pop">ポップ</option></select></label>
         <label>表示位置<select id="burnPosition"><option value="bottom">下</option><option value="middle">中央寄り</option><option value="upper">上</option></select></label>
         <label>左右余白<input id="burnMarginX" type="number" min="0" max="0.3" step="0.01" value="0.08"></label>
         <label>下余白<input id="burnMarginBottom" type="number" min="0" max="0.25" step="0.01" value="0.07"></label>
@@ -434,6 +481,16 @@
       </table>
     </details>
 
+    <details class="panel collapsible" id="lineTimingPanel">
+      <summary>行タイミング編集</summary>
+      <div class="buttons" style="margin-bottom:6px">
+        <button id="ltSetHere" class="good">▶ ここでセット</button>
+        <button id="ltSave">💾 JSONに保存</button>
+        <button id="ltReload" style="background:#555">↺ 再読込</button>
+      </div>
+      <div id="lineTimingList" class="lineTimingList"></div>
+    </details>
+
     <details class="panel collapsible" id="outputPanel">
       <summary>出力</summary>
       <textarea id="outputBox" class="output mono" spellcheck="false"></textarea>
@@ -459,6 +516,9 @@
     const moods = ["title", "memory", "wind", "bloom", "night", "last", "custom"];
     const statuses = ["未着手", "素材待ち", "作業中", "同期済み", "確認待ち", "完了"];
     let active = 0;
+    let phrasePeaks = [];  // analyze_timing2.py が生成したフレーズピーク（秒）
+    let lineTimings = [];  // 行タイミング編集用フラットリスト
+    let activeLineTiming = 0;
     let rawLyrics = "";
     let selectedVideoUrl = "";
     let folderFileMap = new Map();
@@ -494,6 +554,7 @@
     function burnSettings() {
       return {
         font_scale: numberValue("burnFontScale", 1.0),
+        font_family: $("burnFontFamily").value || "mincho",
         position: $("burnPosition").value || "bottom",
         margin_x: numberValue("burnMarginX", 0.08),
         margin_bottom: numberValue("burnMarginBottom", 0.07),
@@ -510,6 +571,7 @@
 
     function setBurnSettings(settings = {}) {
       $("burnFontScale").value = settings.font_scale ?? 1.0;
+      $("burnFontFamily").value = settings.font_family || "mincho";
       $("burnPosition").value = settings.position || "bottom";
       $("burnMarginX").value = settings.margin_x ?? 0.08;
       $("burnMarginBottom").value = settings.margin_bottom ?? 0.07;
@@ -724,11 +786,24 @@
       updateReadout();
     }
 
+    function updateLyricsOverlay() {
+      const ov = $("lyricsOverlay");
+      if (!ov) return;
+      const t = Number($("video").currentTime || 0);
+      // 現在時刻に表示中の行を集める
+      const active_lines = lineTimings.filter(lt => t >= lt.start && t < lt.end);
+      if (active_lines.length === 0) { ov.innerHTML = ""; return; }
+      ov.innerHTML = active_lines.map(lt =>
+        `<div class="lyricLine">${escapeHtml(lt.text)}</div>`
+      ).join("");
+    }
+
     function updateReadout() {
       const scene = scenes[active];
       $("currentTimeLabel").textContent = fmt($("video").currentTime || 0);
       $("activeSceneLabel").textContent = scene ? `${active + 1}. ${scene.section || ""}` : "未選択";
       $("registeredTimeLabel").textContent = scene && scene.synced ? `${fmt(scene.start)}-${fmt(scene.end)}` : "未登録";
+      updateLyricsOverlay();
     }
 
     function syncCurrentScene() {
@@ -737,20 +812,23 @@
       const current = Math.max(0, Math.round(Number(video.currentTime || 0) * 1000) / 1000);
       scenes[active].start = current;
       scenes[active].synced = true;
-      if (active > 0 && Number(scenes[active - 1].start) <= current) {
+      if (scenes[active]._lt) scenes[active]._lt.start = current;
+      if (active > 0) {
         scenes[active - 1].end = current;
+        if (scenes[active - 1]._lt) scenes[active - 1]._lt.end = current;
       }
       if (active < scenes.length - 1 && Number(scenes[active].end) <= current) {
         scenes[active].end = Number(scenes[active + 1].start || (current + 10));
+        if (scenes[active]._lt) scenes[active]._lt.end = scenes[active].end;
       }
       scenes[active].status = "同期済み";
-      const syncedName = scenes[active].section;
+      const syncedName = `${scenes[active].section}: ${scenes[active].note}`;
       if (active < scenes.length - 1) active += 1;
+      activeLineTiming = active;
       manualSelectionUntil = Date.now() + 60000;
-      setStatus( `${syncedName} を ${fmt(current)} 秒に同期しました。次: ${scenes[active].section}（60秒ロック中）`);
+      setStatus(`${syncedName} → ${fmt(current)}s ✓  次: ${scenes[active].note}`);
       render();
       updateReadout();
-      localStorage.setItem("pvProjectTool.current", JSON.stringify(project()));
     }
 
     function endCurrentScene() {
@@ -810,13 +888,16 @@
       const next = Math.max(0, Math.round((Number(scenes[active].start || 0) + delta) * 1000) / 1000);
       scenes[active].start = next;
       scenes[active].synced = true;
+      if (scenes[active]._lt) scenes[active]._lt.start = next;
       manualSelectionUntil = Date.now() + 2500;
-      if (active > 0) scenes[active - 1].end = next;
+      if (active > 0) {
+        scenes[active - 1].end = next;
+        if (scenes[active - 1]._lt) scenes[active - 1]._lt.end = next;
+      }
       $("video").currentTime = next;
-      setStatus( `${scenes[active].section} を ${fmt(next)} 秒に調整しました`);
+      setStatus(`${scenes[active].note} → ${fmt(next)}s`);
       render();
       updateReadout();
-      localStorage.setItem("pvProjectTool.current", JSON.stringify(project()));
     }
 
     $("addScene").addEventListener("click", () => {
@@ -834,6 +915,110 @@
     $("nudgeBack").addEventListener("click", () => nudgeActive(-0.1));
     $("nudgeForward").addEventListener("click", () => nudgeActive(0.1));
     $("nudgeForward5").addEventListener("click", () => nudgeActive(0.5));
+
+    // ─── 行単位でビデオを移動（1押し = 1行）───
+    function seekToLine(direction) {
+      const positions = lineTimings.map(lt => lt.start).filter(Number.isFinite);
+      if (!positions.length) { setStatus("行タイミングが読み込まれていません"); return; }
+      const cur = Number($("video").currentTime || 0);
+      let target = null, targetIdx = -1;
+      if (direction > 0) {
+        targetIdx = lineTimings.findIndex(lt => lt.start > cur + 0.3);
+      } else {
+        for (let i = lineTimings.length - 1; i >= 0; i--) {
+          if (lineTimings[i].start < cur - 0.3) { targetIdx = i; break; }
+        }
+      }
+      if (targetIdx < 0) { setStatus("その方向に行がありません"); return; }
+      target = lineTimings[targetIdx].start;
+      active = targetIdx;
+      activeLineTiming = targetIdx;
+      manualSelectionUntil = Date.now() + 60000;
+      $("video").currentTime = target;
+      setStatus(`${lineTimings[targetIdx].section}: ${lineTimings[targetIdx].text}  (${fmt(target)}s)`);
+      renderActiveOnly();
+    }
+    $("prevPeak").addEventListener("click", () => seekToLine(-1));
+    $("nextPeak").addEventListener("click", () => seekToLine(1));
+
+    // ─── 行タイミング編集 ───
+    function renderLineTimings() {
+      const ul = $("lineTimingList");
+      if (!ul) return;
+      ul.innerHTML = "";
+      lineTimings.forEach((lt, i) => {
+        const div = document.createElement("div");
+        div.className = `ltRow${i === activeLineTiming ? " active" : ""}`;
+        div.innerHTML = `<span class="ltTime">${fmt(lt.start)}</span><span class="ltSection">${escapeHtml(lt.section)}</span><span class="ltText">${escapeHtml(lt.text)}</span>`;
+        div.addEventListener("click", () => {
+          activeLineTiming = i;
+          $("video").currentTime = lt.start;
+          renderLineTimings();
+          setStatus(`行選択: ${lt.text} (${fmt(lt.start)}s)`);
+        });
+        ul.appendChild(div);
+      });
+      ul.querySelectorAll(".ltRow")[activeLineTiming]?.scrollIntoView({ block: "nearest" });
+    }
+
+    function setLineTimingHere() {
+      if (!lineTimings.length) { setStatus("行タイミングが読み込まれていません"); return; }
+      const t = Math.round(Number($("video").currentTime) * 100) / 100;
+      lineTimings[activeLineTiming].start = t;
+      if (activeLineTiming > 0) lineTimings[activeLineTiming - 1].end = t;
+      const text = lineTimings[activeLineTiming].text;
+      if (activeLineTiming < lineTimings.length - 1) {
+        activeLineTiming++;
+        const nextStart = lineTimings[activeLineTiming].start;
+        // 次行の推定開始1秒前にシーク（ピークを探しやすいよう手前から）
+        $("video").currentTime = Math.max(t + 0.5, nextStart - 1.0);
+        setStatus(`「${text}」→ ${fmt(t)}s ✓  次: ${lineTimings[activeLineTiming].text}`);
+      } else {
+        setStatus(`「${text}」→ ${fmt(t)}s ✓（最終行）`);
+      }
+      renderLineTimings();
+    }
+
+    async function saveLineTimings() {
+      const projectDir = currentProjectDir();
+      if (!projectDir) { setStatus("プロジェクトフォルダを設定してください"); return; }
+      // 末尾 end を補完
+      for (let i = 0; i < lineTimings.length; i++) {
+        const next = lineTimings[i + 1];
+        lineTimings[i].end = (next && next.section === lineTimings[i].section)
+          ? next.start : lineTimings[i].sectionEnd;
+      }
+      try {
+        const res = await fetch(projectFileUrl("pv_lyrics_timing.json"), { cache: "no-store" });
+        if (!res.ok) throw new Error("読込失敗");
+        const data = JSON.parse(await res.text());
+        let li = 0;
+        for (const item of data.timings || []) {
+          for (const lt of item.line_timings || []) {
+            if (li < lineTimings.length) {
+              lt.start = lineTimings[li].start;
+              lt.end   = lineTimings[li].end;
+              li++;
+            }
+          }
+        }
+        const content = JSON.stringify(data, null, 2);
+        const saveRes = await fetch("/api/save", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ filename: "pv_lyrics_timing.json", content, projectDir })
+        });
+        const sd = await saveRes.json();
+        setStatus(sd.ok ? "タイミングJSONを保存しました ✓" : `保存失敗: ${sd.error}`);
+      } catch (e) { setStatus(`エラー: ${e}`); }
+    }
+
+    $("ltSetHere").addEventListener("click", setLineTimingHere);
+    $("ltSave").addEventListener("click", saveLineTimings);
+    $("ltReload").addEventListener("click", async () => {
+      const ok = await loadTimingFromProject();
+      if (!ok) setStatus("タイミングJSON読込失敗");
+    });
 
     $("currentTimeLabel").addEventListener("click", () => {
       const current = Number($("video").currentTime || 0);
@@ -1108,25 +1293,62 @@
 
     function applyTiming(text) {
       const data = JSON.parse(text);
+      if (Array.isArray(data.phrase_peaks) && data.phrase_peaks.length > 0) {
+        phrasePeaks = data.phrase_peaks.map(Number).filter(Number.isFinite).sort((a,b)=>a-b);
+      }
       const timings = (data.timings || []).filter(item => item.start !== null && item.start !== undefined);
-      scenes = timings.map((item, index) => {
-        const next = timings[index + 1];
-        const end = item.end !== null && item.end !== undefined
-          ? Number(item.end)
-          : (next ? Number(next.start) : Number($("duration").value || item.start));
-        return {
-          start: Number(item.start),
-          end,
-          section: item.section || `Scene ${index + 1}`,
-          mood: item.mood || "custom",
-          note: (item.lines || []).join(" / "),
+
+      // line_timings があれば 1行=1BOX でシーン構築
+      const flatLines = [];
+      for (const item of timings) {
+        for (const lt of item.line_timings || []) {
+          flatLines.push({
+            section: item.section || "",
+            sectionEnd: Number(item.end),
+            text: String(lt.text || ""),
+            start: Number(lt.start),
+            end: Number(lt.end),
+            mood: item.mood || "custom"
+          });
+        }
+      }
+
+      if (flatLines.length > 0) {
+        // lineTimings と scenes を同じオブジェクト配列で共有
+        lineTimings = flatLines;
+        scenes = flatLines.map(lt => ({
+          start: lt.start,
+          end: lt.end,
+          section: lt.section,
+          mood: lt.mood,
+          note: lt.text,
           status: "同期済み",
           synced: true,
-          lines: item.lines || []
-        };
-      });
+          lines: [lt.text],
+          _lt: lt   // lineTimings への参照
+        }));
+      } else {
+        // line_timings なし: 旧来の1セクション=1シーン
+        lineTimings = [];
+        scenes = timings.map((item, index) => {
+          const next = timings[index + 1];
+          const end = item.end != null ? Number(item.end)
+            : (next ? Number(next.start) : Number($("duration").value || item.start));
+          return {
+            start: Number(item.start), end,
+            section: item.section || `Scene ${index + 1}`,
+            mood: item.mood || "custom",
+            note: (item.lines || []).join(" / "),
+            status: "同期済み", synced: true,
+            lines: item.lines || []
+          };
+        });
+      }
+
       active = 0;
-      setStatus( "同期JSONからシーン表を作りました");
+      activeLineTiming = 0;
+      renderLineTimings();
+      setStatus(`同期JSON読込: ${scenes.length}BOX（1行=1BOX）`);
       render();
     }
 
@@ -1374,19 +1596,12 @@
         if (!res.ok) return;
         const data = await res.json();
         setCurrentProjectDir(projectDir, true);
-        fillSelect($("lyricsSelect"), data.lyrics || [], "選択してください");
         const videos = data.videos || [];
         const currentVideo = $("videoPath").value;
         const videoToLoad = videos.includes(currentVideo) ? currentVideo : (videos[0] || "");
         if (videoToLoad) {
           $("videoPath").value = videoToLoad;
           loadVideoFromPath(videoToLoad);
-        }
-        const lyrics = data.lyrics || [];
-        const currentLyrics = $("lyricsPath").value;
-        if (!currentLyrics && lyrics.length) {
-          $("lyricsPath").value = lyrics[0];
-          if ((data.lyrics || []).length === 1) $("lyricsSelect").value = lyrics[0];
         }
         $("timingPath").value = "pv_lyrics_timing.json";
         const timingLoaded = await loadTimingFromProject();
@@ -1398,6 +1613,21 @@
             if (pj.burnSettings) setBurnSettings(pj.burnSettings);
           }
         } catch {}
+        // 歌詞ファイル: プロジェクトの一覧で強制更新（別プロジェクトの残留を防ぐ）
+        const lyrics = data.lyrics || [];
+        fillSelect($("lyricsSelect"), lyrics, "選択してください");
+        const lyricsToLoad = lyrics.includes($("lyricsPath").value) ? $("lyricsPath").value : (lyrics[0] || "");
+        if (lyricsToLoad) {
+          $("lyricsPath").value = lyricsToLoad;
+          $("lyricsSelect").value = lyricsToLoad;
+          try {
+            const lyricsRes = await fetch(projectFileUrl(lyricsToLoad), { cache: "no-store" });
+            if (lyricsRes.ok) applyLyrics(await lyricsRes.text());
+          } catch {}
+        } else {
+          rawLyrics = "";
+          $("lyricsPreview").textContent = "歌詞ファイルを選ぶとここに表示します";
+        }
         setStatus( timingLoaded
           ? `曲フォルダからPV・同期JSONを読み込みました（PV: ${videoToLoad}）`
           : `曲フォルダからPVを読み込みました（${videoToLoad}）`);
@@ -1427,9 +1657,22 @@
       }
     })();
 
-    // 起動時: プロジェクトフォルダが設定済みならディスク優先で読込
-    // （localStorageはフォルダ未設定時のフォールバックのみ）
+    // 起動時: サーバーのプロジェクト一覧から最終更新が新しいものを自動選択
     (async function autoLoadOnStartup() {
+      try {
+        const res = await fetch("api/projects");
+        const data = await res.json();
+        const projects = (data.projects || []).filter(p => p.lastModified);
+        if (projects.length > 0) {
+          projects.sort((a, b) => b.lastModified - a.lastModified);
+          const newest = projects[0];
+          $("projectDirInput").value = newest.path;
+          setCurrentProjectDir(newest.path, true);
+          await loadFileLists();
+          return;
+        }
+      } catch {}
+      // フォールバック: localStorage / 手動入力
       const dir = ($("projectDirInput").value || "").trim() || localStorage.getItem("pvToolProjectDir") || "";
       if (dir) {
         await loadFileLists();
