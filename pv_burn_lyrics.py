@@ -100,11 +100,16 @@ def select_font_name(settings: dict, font_path: str | None) -> str:
     return font_name
 
 
-def resolve_video(project_dir: Path, project: dict) -> Path:
+def resolve_video(project_dir: Path, project: dict, source_override: str | None = None) -> Path:
     def is_generated(p: Path) -> bool:
         n = p.name.lower()
-        return "lyrics_burn" in n or "lyrics_preview" in n
+        return "lyrics_burn" in n or "lyrics_preview" in n or "_lyrics" in n
 
+    if source_override:
+        p = (project_dir / source_override).resolve()
+        if p.exists():
+            return p
+        raise FileNotFoundError(f"Source video not found: {p}")
     rel = project.get("assets", {}).get("videoPreview") or ""
     if rel:
         p = (project_dir / rel).resolve()
@@ -157,15 +162,30 @@ def prepared_timings(timings: list[dict], source_duration: float, settings: dict
     return sorted(prepared, key=lambda x: float(x.get("start", 0)))
 
 
+def _auto_fs(text: str, base_size: int, avail_px: int) -> int:
+    rows = text.split(r"\N")
+    chars = max((len(row.replace(" ", "")) for row in rows), default=0)
+    if chars == 0:
+        return base_size
+    max_size = int(avail_px * 0.92 / chars)
+    size = min(int(base_size * 1.15), max_size) if chars <= 6 else min(base_size, max_size)
+    if len(rows) >= 2:
+        size = min(size, int(base_size * 0.88))
+    return max(size, 16)
+
+
 def generate_ass(timings: list[dict], settings: dict, width: int, height: int,
                  preview_start: float, preview_end: float, font_path: str | None) -> str:
     is_vertical = height > width
     font_scale = float(settings.get("font_scale", 1.0))
-    font_size = int(max(22, min(80, int(width * (0.052 if is_vertical else 0.036)) * font_scale)))
+    font_size = int(max(22, min(80, int(width * (0.052 if is_vertical else 0.032)) * font_scale)))
     position = str(settings.get("position", "bottom"))
     alignment = {"upper": 8, "middle": 5}.get(position, 2)
     margin_x = int(width * float(settings.get("margin_x", 0.08)))
-    margin_v = int(height * float(settings.get("margin_bottom", 0.07)))
+    # 縦動画はTikTok UIエリアを避けるため下マージンを自動拡大
+    default_margin_bottom = 0.22 if is_vertical else 0.07
+    margin_v = int(height * float(settings.get("margin_bottom", default_margin_bottom)))
+    avail_px = width - 2 * margin_x
     box_opacity = float(settings.get("box_opacity", 0.52))
     box_alpha_hex = format(int((1.0 - box_opacity) * 255), "02X")
     lines_per_page = max(1, min(4, int(settings.get("lines_per_page", 2))))
@@ -207,7 +227,7 @@ WrapStyle: 2
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,{font_name},{font_size},&H00FFFCF8,&H000000FF,&H001A121E,&H{box_alpha_hex}120A16,0,0,0,0,100,100,0,0,4,2,0,{alignment},{margin_x},{margin_x},{margin_v},1
+Style: Default,{font_name},{font_size},&H00FFFCF8,&H000000FF,&H001A121E,&H{box_alpha_hex}120A16,0,0,0,0,100,100,0,0,1,4,1,{alignment},{margin_x},{margin_x},{margin_v},1
 Style: Section,{font_name},{max(14,font_size//2)},&HB0E2D8FF,&H000000FF,&H001A121E,&H{box_alpha_hex}120A16,0,0,0,0,100,100,0,0,1,1,0,{alignment},{margin_x},{margin_x},{margin_v},1
 
 [Events]
@@ -299,7 +319,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"
 
 
 def burn(project_dir: Path, output: Path | None, preview_seconds: float | None,
-         settings: dict | None = None, start_seconds: float = 0.0) -> Path:
+         settings: dict | None = None, start_seconds: float = 0.0,
+         source_override: str | None = None) -> Path:
     project_path = project_dir / "pv_project.json"
     timing_path = project_dir / "pv_lyrics_timing.json"
     if not timing_path.exists():
@@ -308,7 +329,7 @@ def burn(project_dir: Path, output: Path | None, preview_seconds: float | None,
     timing = json.loads(timing_path.read_text(encoding="utf-8-sig"))
     timings = timing.get("timings", [])
     settings = settings or project.get("burnSettings", {}) or {}
-    source = resolve_video(project_dir, project)
+    source = resolve_video(project_dir, project, source_override)
 
     ffmpeg = find_ffmpeg()
     if not ffmpeg:
@@ -342,11 +363,11 @@ def burn(project_dir: Path, output: Path | None, preview_seconds: float | None,
             output = project_dir / f"{_title}_lyrics_preview.mp4"
         else:
             # 本番は上書き禁止：既存なら連番を付ける
-            base = project_dir / f"{_title}_lyrics_burned.mp4"
+            base = project_dir / f"{_title}_lyrics.mp4"
             output = base
             n = 2
             while output.exists():
-                output = project_dir / f"{_title}_lyrics_burned_{n}.mp4"
+                output = project_dir / f"{_title}_lyrics_{n}.mp4"
                 n += 1
     output = output.resolve()
     if output == source:
@@ -402,6 +423,7 @@ def burn(project_dir: Path, output: Path | None, preview_seconds: float | None,
 def main() -> None:
     parser = argparse.ArgumentParser(description="Burn PV lyrics using pv_lyrics_timing.json")
     parser.add_argument("--project", required=True)
+    parser.add_argument("--source")
     parser.add_argument("--output")
     parser.add_argument("--preview-seconds", type=float)
     parser.add_argument("--start-seconds", type=float, default=0.0)
@@ -434,7 +456,7 @@ def main() -> None:
     }
     if args.box_width is not None:
         settings["box_width"] = args.box_width
-    result = burn(project_dir, output, args.preview_seconds, settings, args.start_seconds)
+    result = burn(project_dir, output, args.preview_seconds, settings, args.start_seconds, args.source)
     print(result)
 
 

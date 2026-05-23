@@ -20,6 +20,10 @@ MUSIC_ROOT = Path(r"C:\Users\hana\Documents\音楽配信-20260412").resolve()
 HOST = "127.0.0.1"
 PORT = 8767
 
+# Keep the music project root usable even if older source text was saved with
+# mojibake in the literal above.
+MUSIC_ROOT = Path(r"C:\Users\hana\Documents\音楽配信-20260412").resolve()
+
 
 def validate_project_dir(path_text: str) -> Path:
     requested = Path(path_text).resolve()
@@ -91,7 +95,7 @@ class RangeRequestHandler(SimpleHTTPRequestHandler):
                 if mode == "preview":
                     cmd += ["--preview-seconds", str(payload.get("previewSeconds", 35))]
                     cmd += ["--start-seconds", str(payload.get("previewStartSeconds", 0))]
-                output = str(payload.get("output", "")).strip()
+                output = (payload.get("output") or "").strip()
                 if output:
                     cmd += ["--output", str((project_dir / output).resolve())]
                 settings = payload.get("burnSettings") or {}
@@ -248,6 +252,8 @@ class RangeRequestHandler(SimpleHTTPRequestHandler):
 
     def send_project_file(self, path: Path):
         content_type = mimetypes.guess_type(str(path))[0] or "application/octet-stream"
+        if path.suffix.lower() in {".txt", ".json", ".html", ".css", ".js"} and "charset=" not in content_type:
+            content_type = f"{content_type}; charset=utf-8"
         size = path.stat().st_size
         range_header = self.headers.get("Range")
         if range_header and range_header.startswith("bytes="):
@@ -305,6 +311,8 @@ class RangeRequestHandler(SimpleHTTPRequestHandler):
             return None
 
         content_type = mimetypes.guess_type(str(path))[0] or "application/octet-stream"
+        if path.suffix.lower() in {".txt", ".json", ".html", ".css", ".js"} and "charset=" not in content_type:
+            content_type = f"{content_type}; charset=utf-8"
         size = path.stat().st_size
         range_header = self.headers.get("Range")
         if range_header and range_header.startswith("bytes="):

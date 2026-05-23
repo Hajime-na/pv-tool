@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="ja">
 <head>
   <meta charset="utf-8">
@@ -52,7 +52,7 @@
     h2 { font-size: 15px; color: #ffe0d8; }
     .top {
       display: grid;
-      grid-template-columns: 1fr auto;
+      grid-template-columns: 240px 1fr;
       gap: 12px;
       align-items: center;
     }
@@ -159,6 +159,33 @@
       flex-wrap: wrap;
       gap: 8px;
       align-items: center;
+    }
+    .pvSyncRow {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 168px;
+      gap: 10px;
+      align-items: start;
+      margin-top: 8px;
+    }
+    .pvStage {
+      position: relative;
+      min-width: 0;
+    }
+    .syncSide {
+      display: grid;
+      gap: 8px;
+      justify-items: stretch;
+    }
+    .syncSide button {
+      width: 100%;
+      padding: 10px 8px;
+    }
+    @media (max-width: 900px) {
+      .pvSyncRow { grid-template-columns: 1fr; }
+      .syncSide {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+      .syncSide button { white-space: normal; }
     }
     .syncReadout {
       display: grid;
@@ -307,7 +334,12 @@
     .statusLine {
       color: var(--muted);
       font-size: 12px;
-      min-height: 18px;
+      line-height: 1.35;
+      height: 49px;
+      overflow: hidden;
+      display: -webkit-box;
+      -webkit-line-clamp: 3;
+      -webkit-box-orient: vertical;
     }
     .statusLine.working { color: #5ab4f5; }
     .statusLine.error   { color: #f07070; }
@@ -372,28 +404,32 @@
         </div>
       </div>
       <div class="buttons">
-        <button id="applyVideo">PVを表示</button>
-        <button id="syncCurrent" class="primary">現在位置で同期</button>
-        <button id="endCurrent" class="warn">現在位置で終了</button>
-        <button id="prevScene">前のシーン</button>
-        <button id="nextScene">次のシーン</button>
-        <button id="nudgeBack5">-0.5s</button>
-        <button id="nudgeBack">-0.1s</button>
-        <button id="nudgeForward">+0.1s</button>
-        <button id="nudgeForward5">+0.5s</button>
         <button id="prevPeak" class="warn">← 前行</button>
         <button id="nextPeak" class="warn">→ 次行</button>
 
         <button id="clearProject">表示を初期化</button>
         <button id="clearPathOnly" style="background:#888;color:#fff">フォルダ設定リセット</button>
       </div>
-      <div style="position:relative;display:inline-block;width:100%">
-        <video id="video" controls preload="metadata" style="width:100%;display:block"></video>
-        <div id="lyricsOverlay" style="
-          position:absolute;bottom:48px;left:0;right:0;
-          text-align:center;pointer-events:none;
-          padding:0 8%;
-        "></div>
+      <div class="pvSyncRow">
+        <div class="pvStage">
+          <video id="video" controls preload="metadata" style="width:100%;display:block"></video>
+          <div id="lyricsOverlay" style="
+            position:absolute;bottom:48px;left:0;right:0;
+            text-align:center;pointer-events:none;
+            padding:0 8%;
+          "></div>
+        </div>
+        <div class="syncSide">
+          <button id="applyVideo">PVを表示</button>
+          <button id="syncCurrent" class="primary">現在位置で同期</button>
+          <button id="endCurrent" class="warn">現在位置で終了</button>
+          <button id="prevScene">前のシーン</button>
+          <button id="nextScene">次のシーン</button>
+          <button id="nudgeBack5">-0.5s</button>
+          <button id="nudgeBack">-0.1s</button>
+          <button id="nudgeForward">+0.1s</button>
+          <button id="nudgeForward5">+0.5s</button>
+        </div>
       </div>
       <div class="syncReadout">
         <div><span>現在time <small style="color:#888">（クリックで移動）</small></span><strong id="currentTimeLabel" style="cursor:pointer;text-decoration:underline dotted" title="クリックして秒数を入力して移動">0.00</strong></div>
@@ -523,6 +559,7 @@
     let selectedVideoUrl = "";
     let folderFileMap = new Map();
     let manualSelectionUntil = 0;
+    let splitUndoStack = [];
     let scenes = [
       { start: 0, end: 13.95, section: "Title", mood: "title", note: "タイトル、ジャケット、薄い花びら", status: "完了", synced: true, lines: [] },
       { start: 13.95, end: 41.51, section: "Verse 1", mood: "memory", note: "淡い寄り、左上歌詞、ゆっくりズーム", status: "作業中", synced: true, lines: ["チューリップが揺れるたびに", "あなたのこと 思い出すの"] },
@@ -585,8 +622,28 @@
       $("burnShowSection").checked = Boolean(settings.show_section);
     }
 
+    function normalizeProjectDir(path) {
+      return String(path || "")
+        .replace(/髻ｳ讌ｽ驟堺ｿ｡-20260412/g, "音楽配信-20260412")
+        .replace(/音楽配信-20260412\\MoveLikeThat\\PV\\PV$/g, "音楽配信-20260412\\MoveLikeThat\\PV");
+    }
+
+    function optionValues(select) {
+      return Array.from(select.options || []).map(o => o.value).filter(Boolean);
+    }
+
+    function preferredVideo(videos, current = "") {
+      const list = (videos || []).filter(Boolean);
+      if (current && list.includes(current)) return current;
+      return list.find(v => /16x9[_ -]?jacketpv/i.test(v))
+        || list.find(v => /16x9/i.test(v))
+        || list.find(v => /jacket/i.test(v))
+        || list[0]
+        || "";
+    }
+
     function setCurrentProjectDir(path, save = false) {
-      const clean = String(path || "");
+      const clean = normalizeProjectDir(path);
       $("projectDir").value = clean;
       $("projectDirLabel").textContent = clean || "未選択";
       if (save && clean) localStorage.setItem("pvToolProjectDir", clean);
@@ -594,20 +651,22 @@
 
     function currentProjectDir() {
       // フルパス入力欄が入力されていればそちらを優先
-      const manual = ($("projectDirInput").value || "").trim();
+      const manual = normalizeProjectDir(($("projectDirInput").value || "").trim());
       if (manual) {
+        if ($("projectDirInput").value !== manual) $("projectDirInput").value = manual;
         setCurrentProjectDir(manual, true);
         return manual;
       }
-      const value = $("projectDir").value || localStorage.getItem("pvToolProjectDir") || "";
+      const value = normalizeProjectDir($("projectDir").value || localStorage.getItem("pvToolProjectDir") || "");
       if (value && $("projectDir").value !== value) setCurrentProjectDir(value, true);
       return value;
     }
 
     // フルパス入力欄の変更を即反映
     $("projectDirInput").addEventListener("change", () => {
-      const v = $("projectDirInput").value.trim();
+      const v = normalizeProjectDir($("projectDirInput").value.trim());
       if (v) {
+        $("projectDirInput").value = v;
         setCurrentProjectDir(v, true);
         setStatus( `曲フォルダを設定しました: ${v}`);
       }
@@ -615,7 +674,7 @@
 
     // 起動時にlocalStorageのパスをフルパス欄にも反映
     (function restoreProjectDirInput() {
-      const saved = localStorage.getItem("pvToolProjectDir") || "";
+      const saved = normalizeProjectDir(localStorage.getItem("pvToolProjectDir") || "");
       if (saved && saved.includes("\\")) $("projectDirInput").value = saved;
     })();
 
@@ -674,14 +733,34 @@
       return {
         version: 1,
         audio: $("audio").value ? $("audio").value.split(/[\\/]/).pop() : "",
-        timings: scenes.map((scene, index) => ({
-          index,
-          section: scene.section || `Scene ${index + 1}`,
-          mood: scene.mood || "custom",
-          start: scene.synced ? Number(scene.start) : null,
-          end: scene.synced ? Number(scene.end) : null,
-          lines: scene.lines || []
-        }))
+        timings: scenes.map((scene, index) => {
+          const entry = {
+            index,
+            section: scene.section || `Scene ${index + 1}`,
+            mood: scene.mood || "custom",
+            start: scene.synced ? Number(scene.start) : null,
+            end: scene.synced ? Number(scene.end) : null,
+            lines: scene.lines || []
+          };
+          const lines = (entry.lines || []).filter(l => String(l).trim());
+          if (lines.length > 0 && entry.start != null) {
+            const lt = scene._lt;
+            if (lt && lines.length === 1) {
+              entry.line_timings = [{
+                start: Number(lt.start),
+                end: Number(lt.end),
+                text: String(lt.text || lines[0])
+              }];
+            } else {
+              entry.line_timings = lines.map(text => ({
+                start: Number(entry.start),
+                end: Number(entry.end),
+                text: String(text)
+              }));
+            }
+          }
+          return entry;
+        })
       };
     }
 
@@ -692,7 +771,7 @@
       $("projectStatus").value = data.status || "素材選択";
       $("audio").value = data.assets?.audio || "";
       $("videoPath").value = data.assets?.videoPreview || "";
-      const restoredDir = data.assets?.projectDir || "";
+      const restoredDir = normalizeProjectDir(data.assets?.projectDir || "");
       setCurrentProjectDir(restoredDir, true);
       if (restoredDir && restoredDir.includes("\\")) $("projectDirInput").value = restoredDir;
       $("lyricsPath").value = data.assets?.lyrics || "";
@@ -876,9 +955,8 @@
 
     function moveActive(delta) {
       active = Math.max(0, Math.min(scenes.length - 1, active + delta));
-      manualSelectionUntil = Date.now() + 2500;
-      const start = Number(scenes[active]?.start);
-      if (scenes[active]?.synced && Number.isFinite(start)) $("video").currentTime = Math.max(0, start);
+      manualSelectionUntil = Date.now() + 60000;
+      setStatus(`対象BOXを選択しました: BOX ${active + 1} ${scenes[active]?.section || ""}`);
       render();
       updateReadout();
     }
@@ -1061,11 +1139,11 @@
       const fname = $("lyricsSelect").value;
       $("lyricsPath").value = fname;
       if (folderFileMap.has(fname)) {
-        folderFileMap.get(fname).text().then(text => applyLyrics(text));
+        folderFileMap.get(fname).text().then(text => applyLyrics(text, true));
       } else {
         fetch(projectFileUrl(fname), { cache: "no-store" })
           .then(r => r.ok ? r.text() : Promise.reject())
-          .then(text => applyLyrics(text))
+          .then(text => applyLyrics(text, true))
           .catch(() => { setStatus( "歌詞TXTが見つかりません"); });
       }
     });
@@ -1119,7 +1197,14 @@
     function loadVideoFromPath(path, cacheBust = false) {
       const clean = String(path || "").trim();
       if (!clean) {
-        setStatus( "PVパスが空です");
+        const fallback = preferredVideo(optionValues($("videoSelect")), $("videoPath").value);
+        if (fallback) {
+          $("videoPath").value = fallback;
+          $("videoSelect").value = fallback;
+          loadVideoFromPath(fallback, cacheBust);
+          return;
+        }
+        setStatus( "PVパスが空です。同じフォルダのPV候補読込を押してください");
         return;
       }
       const video = $("video");
@@ -1270,10 +1355,13 @@
       for (const raw of text.split("\n")) {
         const line = raw.trim();
         if (!line) continue;
-        if (line.startsWith("[") && line.endsWith("]")) {
+        const heading = line.match(/^\[([^\]]+)\](?:\s*\([^)]*\))?$/);
+        if (heading) {
           if (lines.length) result.push({ section, lines });
-          section = line.slice(1, -1);
+          section = heading[1].trim();
           lines = [];
+        } else if (/^\([^)]*\)$/.test(line)) {
+          continue;
         } else {
           lines.push(line);
         }
@@ -1446,7 +1534,7 @@
         return;
       }
       setStatus( mode === "preview" ? "焼きこみプレビュー生成中... 0%" : "本番焼きこみ生成中... 0%");
-      const output = mode === "preview" ? "lyrics_burn_preview.mp4" : ($("output").value || "lyrics_burned.mp4");
+      const output = mode === "preview" ? "lyrics_burn_preview.mp4" : ($("output").value || null);
       const settings = burnSettings();
       const totalSec = Number($("duration").value) || Number($("video").duration) || 0;
       try {
@@ -1498,6 +1586,140 @@
       return chunks;
     }
 
+    function distributeLines(lines, count) {
+      const clean = (lines || []).filter(line => String(line).trim());
+      return Array.from({ length: count }, (_, index) => {
+        const start = Math.floor(index * clean.length / count);
+        const end = Math.floor((index + 1) * clean.length / count);
+        return clean.slice(start, end);
+      });
+    }
+
+    function scenePhraseLines(scene) {
+      const lines = (scene.lines || []).filter(line => String(line).trim());
+      if (lines.length) return lines;
+      return String(scene.note || "")
+        .split(/\s*\/\s*/)
+        .map(line => line.trim())
+        .filter(Boolean);
+    }
+
+    function baseSectionName(section) {
+      return String(section || "BOX")
+        .replace(/\s+\d+$/, "")
+        .replace(/-\d+$/, "")
+        .trim() || "BOX";
+    }
+
+    function regroupSceneGroup(group, phrasesPerBox) {
+      const phraseRows = [];
+      for (const scene of group) {
+        for (const line of scenePhraseLines(scene)) phraseRows.push(line);
+      }
+      if (!phraseRows.length) return group;
+      const chunks = chunkLines(phraseRows, phrasesPerBox);
+      const first = group[0];
+      const last = group[group.length - 1];
+      const start0 = Number(first.start);
+      const end0 = Number(last.end);
+      const duration = end0 - start0;
+      if (!Number.isFinite(duration) || duration <= 0) return group;
+      const base = baseSectionName(first.section);
+      return chunks.map((chunk, index) => {
+        const start = start0 + duration * index / chunks.length;
+        const end = index === chunks.length - 1 ? end0 : start0 + duration * (index + 1) / chunks.length;
+        return {
+          ...first,
+          start: Number(start.toFixed(3)),
+          end: Number(end.toFixed(3)),
+          section: chunks.length === 1 ? base : `${base}-${index + 1}`,
+          note: chunk.join(" / "),
+          lines: chunk
+        };
+      });
+    }
+
+    function regroupSelectedSection(phrasesPerBox) {
+      if (!scenes[active]) { setStatus("BOXを選んでください"); return; }
+      const base = baseSectionName(scenes[active].section);
+      let startIndex = active;
+      let endIndex = active;
+      while (startIndex > 0 && baseSectionName(scenes[startIndex - 1].section) === base) startIndex--;
+      while (endIndex + 1 < scenes.length && baseSectionName(scenes[endIndex + 1].section) === base) endIndex++;
+      const group = scenes.slice(startIndex, endIndex + 1);
+      splitUndoStack.push({ scenes: structuredClone(scenes), active });
+      if (splitUndoStack.length > 20) splitUndoStack.shift();
+      const regrouped = regroupSceneGroup(group, phrasesPerBox);
+      scenes.splice(startIndex, group.length, ...regrouped);
+      active = startIndex;
+      manualSelectionUntil = Date.now() + 60000;
+      setStatus(`${base} を1BOX=${phrasesPerBox}フレーズで再構成しました`);
+      render();
+    }
+
+    function regroupAllSections(phrasesPerBox) {
+      const grouped = [];
+      for (let i = 0; i < scenes.length;) {
+        const scene = scenes[i];
+        const lines = scenePhraseLines(scene);
+        if (!lines.length) {
+          grouped.push(scene);
+          i++;
+          continue;
+        }
+        const base = baseSectionName(scene.section);
+        let j = i + 1;
+        while (j < scenes.length && scenePhraseLines(scenes[j]).length && baseSectionName(scenes[j].section) === base) j++;
+        grouped.push(...regroupSceneGroup(scenes.slice(i, j), phrasesPerBox));
+        i = j;
+      }
+      splitUndoStack.push({ scenes: structuredClone(scenes), active });
+      if (splitUndoStack.length > 20) splitUndoStack.shift();
+      scenes = grouped;
+      active = Math.min(active, scenes.length - 1);
+      manualSelectionUntil = Date.now() + 60000;
+      setStatus(`全体を1BOX=${phrasesPerBox}フレーズで再構成しました`);
+      render();
+    }
+
+    function splitSceneAt(index, phrasesPerBox) {
+      const scene = scenes[index];
+      if (!scene) { setStatus("BOXを選んでください"); return; }
+      const start0 = Number(scene.start);
+      const end0 = Number(scene.end);
+      const duration = end0 - start0;
+      if (!Number.isFinite(duration) || duration <= 0) {
+        setStatus("このBOXは開始/終了時刻を入れてから分割してください");
+        return;
+      }
+      const chunks = chunkLines(scenePhraseLines(scene), phrasesPerBox);
+      if (chunks.length <= 1) {
+        setStatus(`このBOXは${phrasesPerBox}フレーズ以内なので分割しません`);
+        return;
+      }
+      splitUndoStack.push({ scenes: structuredClone(scenes), active });
+      if (splitUndoStack.length > 20) splitUndoStack.shift();
+      const split = [];
+      for (let i = 0; i < chunks.length; i++) {
+        const start = start0 + duration * i / chunks.length;
+        const end = i === chunks.length - 1 ? end0 : start0 + duration * (i + 1) / chunks.length;
+        const chunk = chunks[i] || [];
+        split.push({
+          ...scene,
+          start: Number(start.toFixed(3)),
+          end: Number(end.toFixed(3)),
+          section: `${scene.section || "BOX"}-${i + 1}`,
+          note: chunk.length ? chunk.join(" / ") : (i === 0 ? scene.note || "" : ""),
+          lines: chunk
+        });
+      }
+      scenes.splice(index, 1, ...split);
+      active = index;
+      manualSelectionUntil = Date.now() + 60000;
+      setStatus(`BOX ${index + 1} を1BOX=${phrasesPerBox}フレーズで分割しました`);
+      render();
+    }
+
     function splitLongBoxes() {
       const newScenes = [];
       let changed = 0;
@@ -1529,9 +1751,21 @@
         setStatus( "細分化できる長いBOXはありません");
         return;
       }
+      splitUndoStack.push({ scenes: structuredClone(scenes), active });
+      if (splitUndoStack.length > 20) splitUndoStack.shift();
       scenes = newScenes;
       active = Math.min(active, scenes.length - 1);
       setStatus( `長いBOXを細分化しました: ${scenes.length} BOX`);
+      render();
+    }
+
+    function undoSplit() {
+      const previous = splitUndoStack.pop();
+      if (!previous) { setStatus("戻せるBOX分割がありません"); return; }
+      scenes = previous.scenes;
+      active = Math.min(previous.active, scenes.length - 1);
+      manualSelectionUntil = Date.now() + 60000;
+      setStatus("BOX分割を1つ戻しました");
       render();
     }
 
@@ -1542,6 +1776,24 @@
     splitButton.textContent = "BOX細分化";
     splitButton.addEventListener("click", splitLongBoxes);
     $("burnFull").insertAdjacentElement("afterend", splitButton);
+    let splitButtonAnchor = splitButton;
+    [4, 3, 2, 1].forEach(count => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "warn";
+      button.textContent = `選択 1BOX=${count}`;
+      button.addEventListener("click", () => regroupSelectedSection(count));
+      splitButtonAnchor.insertAdjacentElement("afterend", button);
+      splitButtonAnchor = button;
+    });
+    [4, 3, 2, 1].forEach(count => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = `全体 1BOX=${count}`;
+      button.addEventListener("click", () => regroupAllSections(count));
+      splitButtonAnchor.insertAdjacentElement("afterend", button);
+      splitButtonAnchor = button;
+    });
     $("setPreviewStartNow").addEventListener("click", () => {
       $("burnPreviewStart").value = Math.max(0, Math.floor($("video").currentTime || 0));
       setStatus( `プレビュー開始秒を ${$("burnPreviewStart").value} にしました`);
@@ -1597,10 +1849,12 @@
         const data = await res.json();
         setCurrentProjectDir(projectDir, true);
         const videos = data.videos || [];
+        fillSelect($("videoSelect"), videos, "選択してください");
         const currentVideo = $("videoPath").value;
-        const videoToLoad = videos.includes(currentVideo) ? currentVideo : (videos[0] || "");
+        const videoToLoad = preferredVideo(videos, currentVideo);
         if (videoToLoad) {
           $("videoPath").value = videoToLoad;
+          $("videoSelect").value = videoToLoad;
           loadVideoFromPath(videoToLoad);
         }
         $("timingPath").value = "pv_lyrics_timing.json";
@@ -1622,10 +1876,11 @@
           $("lyricsSelect").value = lyricsToLoad;
           try {
             const lyricsRes = await fetch(projectFileUrl(lyricsToLoad), { cache: "no-store" });
-            if (lyricsRes.ok) applyLyrics(await lyricsRes.text());
+            if (lyricsRes.ok) applyLyrics(await lyricsRes.text(), !timingLoaded);
           } catch {}
         } else {
           rawLyrics = "";
+          if (!timingLoaded) scenes = [];
           $("lyricsPreview").textContent = "歌詞ファイルを選ぶとここに表示します";
         }
         setStatus( timingLoaded
