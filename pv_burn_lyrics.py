@@ -149,6 +149,21 @@ def fmt_ass_time(seconds: float) -> str:
 def prepared_timings(timings: list[dict], source_duration: float, settings: dict) -> list[dict]:
     start_offset = max(-5.0, min(5.0, float(settings.get("timing_offset_start", 0.0))))
     end_offset = max(-5.0, min(5.0, float(settings.get("timing_offset_end", start_offset))))
+
+    # start が null のセクションを均等割り（タイミング未設定の場合のフォールバック）
+    null_items = [item for item in timings if item.get("start") is None]
+    timed_items = [item for item in timings if item.get("start") is not None]
+    if null_items and not timed_items and source_duration > 0:
+        n = len(null_items)
+        aug = []
+        for i, item in enumerate(null_items):
+            new_item = dict(item)
+            new_item["start"] = round(source_duration * i / n, 3)
+            new_item["end"]   = round(source_duration * (i + 1) / n, 3)
+            new_item["_offset"] = 0.0
+            aug.append(new_item)
+        return aug
+
     prepared = []
     for item in timings:
         start = item.get("start")
@@ -249,7 +264,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"
         if raw_end <= preview_start or raw_start >= preview_end:
             continue
 
-        lines = [str(l) for l in timing.get("lines", []) if str(l).strip()]
+        lines = [str(l) for l in timing.get("lines", [])
+                 if str(l).strip() and not str(l).strip().startswith("歌詞なし")]
         if not lines:
             continue
 
@@ -265,9 +281,12 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"
                 lt_text  = str(lt.get("text", "")).strip()
                 if not lt_text:
                     continue
-                if pages_lt and abs(pages_lt[-1][0] - lt_start) < 0.01:
-                    # 同じ start → 同じページに追加
-                    pages_lt[-1][2].append(lt_text)
+                same_start = pages_lt and abs(pages_lt[-1][0] - lt_start) < 0.01
+                room_left  = pages_lt and len(pages_lt[-1][2]) < lines_per_page
+                if same_start or room_left:
+                    # 同じ start、またはまだ lines_per_page に達していない → 同ページに追加
+                    prev = pages_lt[-1]
+                    pages_lt[-1] = (prev[0], max(prev[1], lt_end), prev[2] + [lt_text])
                 else:
                     pages_lt.append((lt_start, lt_end, [lt_text]))
             for pi, (p_start, p_end, page_lines) in enumerate(pages_lt):
@@ -354,10 +373,8 @@ def burn(project_dir: Path, output: Path | None, preview_seconds: float | None,
     preview_end = (start_seconds + preview_seconds) if preview_seconds else source_duration
 
     if output is None:
-        # タイトル: project.jsonのtitle > 曲フォルダ名（PVサブフォルダ構造を考慮）
-        _title = (project.get("title") or "").strip()
-        if not _title:
-            _title = project_dir.parent.name if project_dir.name.lower() == "pv" else project_dir.name
+        # 出力ファイル名は常にフォルダ名から決定（title フィールドの汚染を防ぐ）
+        _title = project_dir.parent.name if project_dir.name.lower() == "pv" else project_dir.name
         if preview_seconds:
             # プレビューは上書きOK（確認用の一時ファイル）
             output = project_dir / f"{_title}_lyrics_preview.mp4"

@@ -331,18 +331,23 @@
       font-family: ui-monospace, Consolas, monospace;
       font-size: 12px;
     }
-    .statusLine {
+    .statusBar {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      background: #0d0f13;
+      border-bottom: 1px solid var(--line);
+      padding: 8px 14px;
+      font-size: 13px;
+      line-height: 1.5;
       color: var(--muted);
-      font-size: 12px;
-      line-height: 1.35;
-      height: 49px;
-      overflow: hidden;
-      display: -webkit-box;
-      -webkit-line-clamp: 3;
-      -webkit-box-orient: vertical;
+      min-height: 36px;
+      word-break: break-all;
     }
-    .statusLine.working { color: #5ab4f5; }
-    .statusLine.error   { color: #f07070; }
+    .statusBar.working { color: #5ab4f5; }
+    .statusBar.error   { color: #f07070; }
+    /* 旧 statusLine は非表示（h1 横の残骸を隠す） */
+    .statusLine { display: none; }
     @media (max-width: 1000px) {
       body { grid-template-columns: 1fr; }
       aside { max-height: none; border-left: 0; border-top: 1px solid var(--line); }
@@ -353,10 +358,10 @@
 </head>
 <body>
   <main>
+    <div class="statusBar" id="status">プロジェクト構成、素材メモ、シーン表をまとめます</div>
     <div class="top">
       <div>
         <h1>PV制作ツール</h1>
-        <div class="statusLine" id="status">プロジェクト構成、素材メモ、シーン表をまとめます</div>
       </div>
       <div class="buttons">
         <button id="loadLocal" class="warn">保存データ読込</button>
@@ -387,6 +392,7 @@
           </label>
           <label>同じフォルダの音源<select id="audioSelect"><option value="">選択してください</option></select></label>
           <label class="fileButton">PV選択（手動）<input id="videoFile" type="file"></label>
+          <label style="display:none"><select id="videoSelect"></select></label>
           <label>PVパス<input id="videoPath" value=""></label>
         </div>
         <div class="step">
@@ -544,7 +550,7 @@
     function setStatus(msg) {
       const el = $("status");
       el.textContent = msg;
-      const isWorking = /中[。．…\.]*$/.test(msg) || /^開始中/.test(msg);
+      const isWorking = /中[。．…\.\s:\d%()]/.test(msg) || /中$/.test(msg) || /^開始中/.test(msg);
       const isError   = /失敗|できません|エラー|not found|Error/i.test(msg);
       el.classList.toggle("working", isWorking && !isError);
       el.classList.toggle("error",   isError);
@@ -591,8 +597,8 @@
     function burnSettings() {
       return {
         font_scale: numberValue("burnFontScale", 1.0),
-        font_family: $("burnFontFamily").value || "mincho",
-        position: $("burnPosition").value || "bottom",
+        font_family: $("burnFontFamily")?.value || "mincho",
+        position: $("burnPosition")?.value || "bottom",
         margin_x: numberValue("burnMarginX", 0.08),
         margin_bottom: numberValue("burnMarginBottom", 0.07),
         box_opacity: numberValue("burnBoxOpacity", 0.52),
@@ -602,7 +608,7 @@
         preview_seconds: numberValue("burnPreviewSeconds", 35),
         timing_offset_start: clamp(numberValue("burnTimingOffsetStart", 0), -5, 5),
         timing_offset_end: clamp(numberValue("burnTimingOffsetEnd", 0), -5, 5),
-        show_section: $("burnShowSection").checked
+        show_section: Boolean($("burnShowSection")?.checked)
       };
     }
 
@@ -663,12 +669,13 @@
     }
 
     // フルパス入力欄の変更を即反映
-    $("projectDirInput").addEventListener("change", () => {
+    $("projectDirInput").addEventListener("change", async () => {
       const v = normalizeProjectDir($("projectDirInput").value.trim());
       if (v) {
         $("projectDirInput").value = v;
         setCurrentProjectDir(v, true);
         setStatus( `曲フォルダを設定しました: ${v}`);
+        await loadFileLists();
       }
     });
 
@@ -697,12 +704,13 @@
       }
     })();
 
-    $("projectSelect").addEventListener("change", () => {
+    $("projectSelect").addEventListener("change", async () => {
       const v = $("projectSelect").value;
       if (!v) return;
       $("projectDirInput").value = v;
       setCurrentProjectDir(v, true);
       setStatus( `曲フォルダを設定しました: ${v}`);
+      await loadFileLists();
     });
 
     function project() {
@@ -742,7 +750,7 @@
             end: scene.synced ? Number(scene.end) : null,
             lines: scene.lines || []
           };
-          const lines = (entry.lines || []).filter(l => String(l).trim());
+          const lines = (entry.lines || []).filter(l => { const s = String(l).trim(); return s && !s.startsWith("歌詞なし"); });
           if (lines.length > 0 && entry.start != null) {
             const lt = scene._lt;
             if (lt && lines.length === 1) {
@@ -1313,8 +1321,19 @@
     }
 
     $("fetchTiming").addEventListener("click", async () => {
+      const projDir = currentProjectDir();
+      setStatus(`同期JSON読込中: ${projDir || "（フォルダ未設定）"}`);
       if (!await loadTimingFromProject()) {
         setStatus( "PVフォルダ直下の同期JSONが見つかりません");
+        return;
+      }
+      // timing 読込後、現プロジェクトの歌詞ファイルも再ロードして lyricsPreview を一致させる
+      const lyricsFile = $("lyricsPath").value.trim();
+      if (lyricsFile) {
+        try {
+          const lr = await fetch(projectFileUrl(lyricsFile), { cache: "no-store" });
+          if (lr.ok) applyLyrics(await lr.text(), false);
+        } catch { /* 歌詞ファイルなしは無視 */ }
       }
     });
 
@@ -1355,7 +1374,9 @@
       for (const raw of text.split("\n")) {
         const line = raw.trim();
         if (!line) continue;
-        const heading = line.match(/^\[([^\]]+)\](?:\s*\([^)]*\))?$/);
+        // 半角 [Section] と全角 【Section】 の両形式をセクション区切りとして認識
+        const heading = line.match(/^\[([^\]]+)\](?:\s*\([^)]*\))?$/)
+                     || line.match(/^【([^】]+)】$/);
         if (heading) {
           if (lines.length) result.push({ section, lines });
           section = heading[1].trim();
@@ -1472,8 +1493,21 @@
         setStatus( "保存データがありません");
         return;
       }
+      // プロジェクトフォルダ・動画・歌詞パスは現在の選択を維持し、
+      // scenes・歌詞テキスト・メタデータのみ復元する
+      const curDir   = $("projectDirInput").value;
+      const curVideo = $("videoPath").value;
+      const curAudio = $("audio").value;
+      const curLyrics = $("lyricsPath").value;
       setProject(JSON.parse(saved));
-      setStatus( "ブラウザ保存データを読み込みました（ディスクへの書き込みは「同じフォルダに保存」で）");
+      if (curDir)    { $("projectDirInput").value = curDir; setCurrentProjectDir(curDir, false); }
+      if (curVideo)  $("videoPath").value = curVideo;
+      if (curAudio)  $("audio").value = curAudio;
+      if (curLyrics) $("lyricsPath").value = curLyrics;
+      // title は現在のフォルダ名で上書き（保存データの title 汚染を防ぐ）
+      const fTitle = folderTitle(curDir || currentProjectDir());
+      if (fTitle) $("title").value = fTitle;
+      setStatus( "シーン・歌詞データを復元しました（プロジェクトフォルダは維持）");
     });
 
     $("exportJson").addEventListener("click", () => {
@@ -1499,11 +1533,24 @@
       }
     });
 
-    async function saveToFolder(projectDir) {
-      const files = [
-        ["pv_project.json", JSON.stringify(project(), null, 2)],
-        ["pv_lyrics_timing.json", JSON.stringify(timingJson(), null, 2)]
-      ];
+    function folderTitle(projectDir) {
+      const parts = (projectDir || "").replace(/\\/g, "/").split("/").filter(Boolean);
+      const pvIdx = parts.findLastIndex(p => p.toLowerCase() === "pv");
+      return pvIdx > 0 ? parts[pvIdx - 1] : parts[parts.length - 1] || "";
+    }
+
+    async function saveToFolder(projectDir, { saveTimingJson = true } = {}) {
+      let pjData = project();
+      // title が空の場合はフォルダ名から導出（ディスクの汚染タイトルを引き継がない）
+      if (!pjData.title) {
+        const derived = folderTitle(projectDir);
+        if (derived) {
+          pjData = { ...pjData, title: derived };
+          $("title").value = derived;
+        }
+      }
+      const files = [["pv_project.json", JSON.stringify(pjData, null, 2)]];
+      if (saveTimingJson) files.push(["pv_lyrics_timing.json", JSON.stringify(timingJson(), null, 2)]);
       for (const [filename, content] of files) {
         const res = await fetch("api/save", {
           method: "POST",
@@ -1513,7 +1560,7 @@
         const data = await res.json();
         if (!data.ok) throw new Error(data.error || filename);
       }
-      localStorage.setItem("pvProjectTool.current", JSON.stringify(project()));
+      localStorage.setItem("pvProjectTool.current", JSON.stringify(pjData));
     }
 
     async function burnLyrics(mode) {
@@ -1527,14 +1574,16 @@
         return;
       }
       try {
-        setStatus( "タイミングファイルを保存中...");
-        await saveToFolder(projectDir);
+        setStatus( "プロジェクトファイルを保存中...");
+        await saveToFolder(projectDir, { saveTimingJson: true });
       } catch (error) {
-        setStatus( `焼きこみ失敗: タイミングファイルの保存エラー: ${error.message}`);
+        setStatus( `焼きこみ失敗: プロジェクトファイルの保存エラー: ${error.message}`);
         return;
       }
       setStatus( mode === "preview" ? "焼きこみプレビュー生成中... 0%" : "本番焼きこみ生成中... 0%");
-      const output = mode === "preview" ? "lyrics_burn_preview.mp4" : ($("output").value || null);
+      const rawOut = ($("output")?.value || "").trim();
+      const output = mode === "preview" ? "lyrics_burn_preview.mp4"
+                   : (rawOut && /\.(mp4|mov|avi)$/i.test(rawOut) ? rawOut : null);
       const settings = burnSettings();
       const totalSec = Number($("duration").value) || Number($("video").duration) || 0;
       try {
@@ -1566,10 +1615,13 @@
               if (s.error) {
                 setStatus( `焼きこみ失敗: ${s.error}`);
               } else {
+                const outputFile = s.output_path || output;
                 setStatus( mode === "preview" ? "プレビュー完成！" : "本番焼きこみ完成！");
-                showBurnResult(output);
-                loadVideoFromPath(output, true);
-                $("video").scrollIntoView({ block: "center" });
+                showBurnResult(outputFile);
+                if (mode === "preview" && outputFile) {
+                  loadVideoFromPath(outputFile, true);
+                  $("video").scrollIntoView({ block: "center" });
+                }
               }
               resolve();
             }
@@ -1843,9 +1895,20 @@
           setStatus( "曲フォルダはツール本体ではなく、C:\\Codex\\PV\\曲名 を指定してください");
           return;
         }
+        scenes = [];
+        lineTimings = [];
+        $("lyricsPath").value = "";
+        $("videoPath").value = "";
+        $("lyricsPreview").textContent = "読み込み中...";
+        rawLyrics = "";
+        // プロジェクト切替時に前プロジェクトの値を引き継がないようクリア
+        $("title").value = "";
+        $("audio").value = "";
+        $("output").value = "";
+        render();
         const query = `?projectDir=${encodeURIComponent(projectDir)}`;
         const res = await fetch(`api/files${query}`, { cache: "no-store" });
-        if (!res.ok) return;
+        if (!res.ok) { setStatus(`フォルダ読込失敗: ${projectDir}`); return; }
         const data = await res.json();
         setCurrentProjectDir(projectDir, true);
         const videos = data.videos || [];
@@ -1865,19 +1928,38 @@
           if (pjRes.ok) {
             const pj = await pjRes.json();
             if (pj.burnSettings) setBurnSettings(pj.burnSettings);
+            // title はフォルダ名を正として使い、異なる値が入っていても上書きしない
+            $("title").value = folderTitle(projectDir);
+            if (pj.assets?.audio) $("audio").value = pj.assets.audio;
+            if (pj.assets?.output) $("output").value = pj.assets.output;
+            // videoPreview が保存されていればそれを優先して使う
+            const savedVideo = pj.assets?.videoPreview || "";
+            if (savedVideo && videos.includes(savedVideo) && savedVideo !== $("videoPath").value) {
+              $("videoPath").value = savedVideo;
+              $("videoSelect").value = savedVideo;
+              loadVideoFromPath(savedVideo);
+            }
           }
         } catch {}
         // 歌詞ファイル: プロジェクトの一覧で強制更新（別プロジェクトの残留を防ぐ）
         const lyrics = data.lyrics || [];
         fillSelect($("lyricsSelect"), lyrics, "選択してください");
-        const lyricsToLoad = lyrics.includes($("lyricsPath").value) ? $("lyricsPath").value : (lyrics[0] || "");
+        const lyricsToLoad = lyrics[0] || "";
         if (lyricsToLoad) {
           $("lyricsPath").value = lyricsToLoad;
           $("lyricsSelect").value = lyricsToLoad;
           try {
             const lyricsRes = await fetch(projectFileUrl(lyricsToLoad), { cache: "no-store" });
-            if (lyricsRes.ok) applyLyrics(await lyricsRes.text(), !timingLoaded);
-          } catch {}
+            if (lyricsRes.ok) {
+              applyLyrics(await lyricsRes.text(), !timingLoaded);
+            } else {
+              setStatus(`歌詞ファイル読込失敗 (${lyricsRes.status}): ${lyricsToLoad}`);
+              $("lyricsPreview").textContent = "歌詞ファイルを選ぶとここに表示します";
+            }
+          } catch (e) {
+            setStatus(`歌詞ファイルエラー: ${e}`);
+            $("lyricsPreview").textContent = "歌詞ファイルを選ぶとここに表示します";
+          }
         } else {
           rawLyrics = "";
           if (!timingLoaded) scenes = [];
@@ -1912,7 +1994,7 @@
       }
     })();
 
-    // 起動時: サーバーのプロジェクト一覧から最終更新が新しいものを自動選択
+    // 起動時: api/projects の最終更新プロジェクトを最優先（pv_project.json の mtime = 最後に作業したプロジェクト）
     (async function autoLoadOnStartup() {
       try {
         const res = await fetch("api/projects");
@@ -1927,8 +2009,16 @@
           return;
         }
       } catch {}
-      // フォールバック: localStorage / 手動入力
-      const dir = ($("projectDirInput").value || "").trim() || localStorage.getItem("pvToolProjectDir") || "";
+      // フォールバック: localStorage
+      const savedDir = normalizeProjectDir(localStorage.getItem("pvToolProjectDir") || "");
+      if (savedDir && savedDir.includes("\\")) {
+        $("projectDirInput").value = savedDir;
+        setCurrentProjectDir(savedDir, false);
+        await loadFileLists();
+        return;
+      }
+      // フォールバック: 手動入力
+      const dir = ($("projectDirInput").value || "").trim();
       if (dir) {
         await loadFileLists();
         return;

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import mimetypes
 import json
+import re
 import subprocess
 import sys
 import threading
@@ -10,7 +11,7 @@ from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 # 焼きこみ進捗管理
-_burn_status: dict = {"running": False, "progress": "", "percent": 0, "total_sec": 0}
+_burn_status: dict = {"running": False, "progress": "", "percent": 0, "total_sec": 0, "output_path": ""}
 _burn_lock = threading.Lock()
 
 
@@ -37,7 +38,7 @@ def validate_project_dir(path_text: str) -> Path:
 
 def is_generated_video(path: Path) -> bool:
     name = path.name.lower()
-    return "lyrics_burn" in name or "lyrics_preview" in name or name.startswith("lyrics_burn_preview")
+    return "lyrics_burn" in name or "lyrics_preview" in name or "_lyrics" in name
 
 
 class RangeRequestHandler(SimpleHTTPRequestHandler):
@@ -91,12 +92,12 @@ class RangeRequestHandler(SimpleHTTPRequestHandler):
                 script = ROOT / "pv_burn_lyrics.py"
                 if not script.exists():
                     raise ValueError("pv_burn_lyrics.py not found")
-                cmd = [sys.executable, "-u", str(script), "--project", str(project_dir)]
+                cmd = [sys.executable, "-u", "-X", "utf8", str(script), "--project", str(project_dir)]
                 if mode == "preview":
                     cmd += ["--preview-seconds", str(payload.get("previewSeconds", 35))]
                     cmd += ["--start-seconds", str(payload.get("previewStartSeconds", 0))]
                 output = (payload.get("output") or "").strip()
-                if output:
+                if output and re.search(r'\.(mp4|mov|avi)$', output, re.IGNORECASE):
                     cmd += ["--output", str((project_dir / output).resolve())]
                 settings = payload.get("burnSettings") or {}
                 if isinstance(settings, dict):
@@ -122,7 +123,7 @@ class RangeRequestHandler(SimpleHTTPRequestHandler):
                 with _burn_lock:
                     if _burn_status.get("running"):
                         raise ValueError("焼きこみが既に実行中です")
-                    _burn_status.update({"running": True, "progress": "開始中...", "percent": 0, "total_sec": total_sec, "error": "", "done": False})
+                    _burn_status.update({"running": True, "progress": "開始中...", "percent": 0, "total_sec": total_sec, "error": "", "done": False, "output_path": ""})
                 def run_burn():
                     stdout_lines: list[str] = []
                     stderr_lines: list[str] = []
@@ -151,8 +152,14 @@ class RangeRequestHandler(SimpleHTTPRequestHandler):
                         t1.join(); t2.join()
                         if proc.returncode != 0:
                             raise RuntimeError("\n".join(stderr_lines) or "\n".join(stdout_lines) or "burn failed")
+                        output_name = ""
+                        for line in reversed(stdout_lines):
+                            p = Path(line.strip())
+                            if p.suffix.lower() in {".mp4", ".mov", ".avi"}:
+                                output_name = p.name
+                                break
                         with _burn_lock:
-                            _burn_status.update({"running": False, "progress": "完了", "percent": 100, "done": True, "error": ""})
+                            _burn_status.update({"running": False, "progress": "完了", "percent": 100, "done": True, "error": "", "output_path": output_name})
                     except Exception as exc:
                         with _burn_lock:
                             _burn_status.update({"running": False, "progress": "エラー", "percent": 0, "done": True, "error": str(exc)})
@@ -186,22 +193,25 @@ class RangeRequestHandler(SimpleHTTPRequestHandler):
             return
         if urlparse(self.path).path == "/api/projects":
             projects = []
+            def proj_mtime(d: Path) -> int:
+                # pv_project.json の更新時刻を優先（最後に saveToFolder したプロジェクト = 最後に作業したプロジェクト）
+                pj = d / "pv_project.json"
+                if pj.exists():
+                    return int(pj.stat().st_mtime * 1000)
+                tj = d / "pv_lyrics_timing.json"
+                return int((tj if tj.exists() else d).stat().st_mtime * 1000)
             if PV_ROOT.exists():
                 for path in sorted(PV_ROOT.iterdir()):
                     if not path.is_dir() or path.name.lower() == "pv-tool":
                         continue
-                    tj = path / "pv_lyrics_timing.json"
-                    mtime = int((tj if tj.exists() else path).stat().st_mtime * 1000)
-                    projects.append({"name": path.name, "path": str(path.resolve()), "lastModified": mtime})
+                    projects.append({"name": path.name, "path": str(path.resolve()), "lastModified": proj_mtime(path)})
             if MUSIC_ROOT.exists():
                 for song_dir in sorted(MUSIC_ROOT.iterdir()):
                     if not song_dir.is_dir():
                         continue
                     pv_dir = song_dir / "PV"
                     if pv_dir.is_dir():
-                        tj = pv_dir / "pv_lyrics_timing.json"
-                        mtime = int((tj if tj.exists() else pv_dir).stat().st_mtime * 1000)
-                        projects.append({"name": song_dir.name, "path": str(pv_dir.resolve()), "lastModified": mtime})
+                        projects.append({"name": song_dir.name, "path": str(pv_dir.resolve()), "lastModified": proj_mtime(pv_dir)})
             body = json.dumps({"projects": projects}, ensure_ascii=False).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
